@@ -1,0 +1,200 @@
+import cv2
+import numpy as np
+import os
+
+
+def cikti_klasoru_olustur():
+    if not os.path.exists('cikti'):
+        os.makedirs('cikti')
+
+
+def gorev1_gri_ton_ve_kareler(resim):
+    # Resmi gri tona çevir
+    gri_resim = cv2.cvtColor(resim, cv2.COLOR_BGR2GRAY)
+    # Tutarlı kaydetme için BGR'a geri çevir
+    gri_resim = cv2.cvtColor(gri_resim, cv2.COLOR_GRAY2BGR)
+
+    yukseklik, genislik = gri_resim.shape[:2]
+    kare_boyutu = min(yukseklik, genislik) // 10
+
+    # Köşelere siyah kareler ekle
+    konumlar = [(0, 0), (0, genislik - kare_boyutu),
+                (yukseklik - kare_boyutu, 0), (yukseklik - kare_boyutu, genislik - kare_boyutu)]
+
+    for y, x in konumlar:
+        gri_resim[y:y + kare_boyutu, x:x + kare_boyutu] = [0, 0, 0]
+
+    return gri_resim
+
+
+def gorev2_kucuk_resim_ekle(ana_resim, kucuk_resim_yolu):
+    kucuk_resim = cv2.imread(kucuk_resim_yolu)
+    if kucuk_resim is None:
+        raise ValueError("Küçük resim yüklenemedi")
+
+    # Küçük resmi ana resmin %20'si boyutuna getir
+    yukseklik, genislik = ana_resim.shape[:2]
+    kucuk_yukseklik = yukseklik // 5
+    kucuk_genislik = int((kucuk_yukseklik / kucuk_resim.shape[0]) * kucuk_resim.shape[1])
+    kucuk_resim = cv2.resize(kucuk_resim, (kucuk_genislik, kucuk_yukseklik))
+
+    # Küçük resmi sağ alt köşeye yerleştir
+    y_konum = yukseklik - kucuk_yukseklik - 50
+    x_konum = genislik - kucuk_genislik - 50
+
+    # Yumuşak geçiş için maske oluştur
+    maske = np.ones(kucuk_resim.shape, dtype=np.float32)
+    harmanlanmis = ana_resim.copy()
+    roi = harmanlanmis[y_konum:y_konum + kucuk_yukseklik, x_konum:x_konum + kucuk_genislik]
+    harmanlanmis[y_konum:y_konum + kucuk_yukseklik, x_konum:x_konum + kucuk_genislik] = \
+        cv2.addWeighted(roi, 0.5, kucuk_resim, 0.5, 0)
+
+    return harmanlanmis
+
+
+def gorev3_bolge_kopyala(resim):
+    yukseklik, genislik = resim.shape[:2]
+    # Merkez bölgeyi seç
+    bolge_boyutu = min(yukseklik, genislik) // 4
+    merkez_y = yukseklik // 2
+    merkez_x = genislik // 2
+
+    # Merkezdeki bölgeyi kopyala
+    merkez_y1 = merkez_y - bolge_boyutu // 2
+    merkez_y2 = merkez_y + bolge_boyutu // 2
+    merkez_x1 = merkez_x - bolge_boyutu // 2
+    merkez_x2 = merkez_x + bolge_boyutu // 2
+    
+    # Sınırları kontrol et
+    merkez_y1 = max(0, merkez_y1)
+    merkez_y2 = min(yukseklik, merkez_y2)
+    merkez_x1 = max(0, merkez_x1)
+    merkez_x2 = min(genislik, merkez_x2)
+    
+    bolge = resim[merkez_y1:merkez_y2, merkez_x1:merkez_x2].copy()
+    bolge_boyutu = bolge.shape[0]  # Gerçek bölge boyutunu al
+
+    # Sağ üst köşeye yapıştır ve harmanlama yap
+    y_konum = 50
+    x_konum = genislik - bolge_boyutu - 50
+
+    # Hedef bölgenin sınırlarını kontrol et
+    if y_konum + bolge_boyutu > yukseklik or x_konum + bolge_boyutu > genislik:
+        return resim  # Eğer sığmıyorsa orijinal resmi döndür
+
+    sonuc = resim.copy()
+    roi = sonuc[y_konum:y_konum + bolge_boyutu, x_konum:x_konum + bolge_boyutu]
+    
+    # Boyutların eşleştiğinden emin ol
+    if roi.shape == bolge.shape:
+        sonuc[y_konum:y_konum + bolge_boyutu, x_konum:x_konum + bolge_boyutu] = \
+            cv2.addWeighted(roi, 0.5, bolge, 0.5, 0)
+
+    return sonuc
+
+
+def gorev4_resim_dondur(resim):
+    yukseklik, genislik = resim.shape[:2]
+    merkez = (genislik // 2, yukseklik // 2)
+
+    # Dönüş matrisleri
+    M_sol = cv2.getRotationMatrix2D(merkez, 45, 1.0)
+    M_sag = cv2.getRotationMatrix2D(merkez, -60, 1.0)
+
+    # Kırpılmayı önlemek için matris ayarlaması
+    cos = np.abs(M_sol[0, 0])
+    sin = np.abs(M_sol[0, 1])
+    yeni_genislik = int((yukseklik * sin) + (genislik * cos))
+    yeni_yukseklik = int((yukseklik * cos) + (genislik * sin))
+
+    M_sol[0, 2] += (yeni_genislik / 2) - merkez[0]
+    M_sol[1, 2] += (yeni_yukseklik / 2) - merkez[1]
+
+    sol_donmus = cv2.warpAffine(resim, M_sol, (yeni_genislik, yeni_yukseklik))
+
+    # Sağa dönüş için aynı işlemler
+    cos = np.abs(M_sag[0, 0])
+    sin = np.abs(M_sag[0, 1])
+    yeni_genislik = int((yukseklik * sin) + (genislik * cos))
+    yeni_yukseklik = int((yukseklik * cos) + (genislik * sin))
+
+    M_sag[0, 2] += (yeni_genislik / 2) - merkez[0]
+    M_sag[1, 2] += (yeni_yukseklik / 2) - merkez[1]
+
+    sag_donmus = cv2.warpAffine(resim, M_sag, (yeni_genislik, yeni_yukseklik))
+
+    return sol_donmus, sag_donmus
+
+
+def gorev5_nesne_tespiti(resim):
+    # Gri tona çevir
+    gri = cv2.cvtColor(resim, cv2.COLOR_BGR2GRAY)
+    
+    # Gürültüyü azalt
+    gri = cv2.GaussianBlur(gri, (5, 5), 0)
+    
+    # Kenar tespiti
+    kenarlar = cv2.Canny(gri, 50, 150)
+    
+    # Kenarları genişlet
+    kernel = np.ones((5,5), np.uint8)
+    kenarlar = cv2.dilate(kenarlar, kernel, iterations=1)
+    
+    # Konturları bul
+    konturlar, _ = cv2.findContours(kenarlar, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    
+    sonuc = resim.copy()
+    
+    # En büyük konturu bul
+    if konturlar:
+        en_buyuk_kontur = max(konturlar, key=cv2.contourArea)
+        alan = cv2.contourArea(en_buyuk_kontur)
+        
+        if alan > 1000:  # Minimum alan kontrolü
+            x, y, w, h = cv2.boundingRect(en_buyuk_kontur)
+            cv2.rectangle(sonuc, (x, y), (x + w, y + h), (0, 255, 0), 2)
+            cv2.putText(sonuc, "Tahta tespit edildi", (x, y-10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
+    
+    return sonuc
+
+
+def main():
+    # Çıktı klasörünü oluştur
+    cikti_klasoru_olustur()
+
+    # Ana resmi yükle
+    resim_yolu = 'manzara.jpeg'
+    kucuk_resim_yolu = 'cicek.jpeg'
+
+    ana_resim = cv2.imread(resim_yolu)
+    if ana_resim is None:
+        print(f"Hata: Ana resim yüklenemedi: {resim_yolu}")
+        return
+
+    # Görev 1: Gri ton ve kareler
+    sonuc1 = gorev1_gri_ton_ve_kareler(ana_resim)
+    cv2.imwrite('cikti/gorev1_gri_ton_kareler.jpg', sonuc1)
+
+    # Görev 2: Küçük resim ekleme
+    try:
+        sonuc2 = gorev2_kucuk_resim_ekle(ana_resim, kucuk_resim_yolu)
+        cv2.imwrite('cikti/gorev2_kucuk_resim_eklendi.jpg', sonuc2)
+    except ValueError as e:
+        print(f"Görev 2'de Hata: {e}")
+
+    # Görev 3: Bölge kopyalama
+    sonuc3 = gorev3_bolge_kopyala(ana_resim)
+    cv2.imwrite('cikti/gorev3_bolge_kopyalandi.jpg', sonuc3)
+
+    # Görev 4: Resmi döndürme
+    sol_donmus, sag_donmus = gorev4_resim_dondur(ana_resim)
+    cv2.imwrite('cikti/gorev4_sola_donmus.jpg', sol_donmus)
+    cv2.imwrite('cikti/gorev4_saga_donmus.jpg', sag_donmus)
+
+    # Görev 5: Nesne tespiti
+    sonuc5 = gorev5_nesne_tespiti(ana_resim)
+    cv2.imwrite('cikti/gorev5_nesne_tespiti.jpg', sonuc5)
+
+
+if __name__ == "__main__":
+    main()
